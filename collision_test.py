@@ -255,6 +255,21 @@ def log_collision(mean: float, frame: cv.typing.MatLike, depth_img: np.ndarray, 
 COLLISION_THRESHOLD_PERCENTAGE = 0.50
 
 
+class StoppableThread(threading.Thread):
+    """Thread class with a stop() method. The thread itself has to check
+    regularly for the stopped() condition."""
+
+    def __init__(self,  *args, **kwargs):
+        super(StoppableThread, self).__init__(*args, **kwargs)
+        self._stop_event = threading.Event()
+
+    def stop(self):
+        self._stop_event.set()
+
+    def stopped(self):
+        return self._stop_event.is_set()
+
+
 def main():
     context = DepthRenderContext(model=depth.Model.Small)
     os.makedirs(os.path.dirname("logs/images/"), exist_ok=True)
@@ -273,8 +288,10 @@ def main():
     time.sleep(1)
 
     # Drone movement script here
+    drone.tello.connect()
     drone.tello.streamon()
-    drone_main.start(drone)
+    seq_thread = StoppableThread(target=drone_main.start, args=(drone,))
+    seq_thread.start()
     # end
 
     while True:
@@ -303,7 +320,7 @@ def main():
             # save snapshot of current frame
         
         is_logging = getattr(main, "is_logging", False)
-        time_start = getattr(main, "logging_time_start", time.time())
+        time_start = getattr(main, "logging_time_start", 0)
         collision_id = getattr(main, "collision_id", 1)
         time_now = time.time()
 
@@ -311,17 +328,24 @@ def main():
             elapsed = time_now - time_start
             
             if elapsed >= SNAPSHOT_DURATION_SECONDS:
-                log_collision(mean, frame, depth_img, f"DURATION={SNAPSHOT_DURATION_SECONDS}s:final", collision_id) # save final snapshot
+                print("Logging final collision state.")
+                log_collision(mean, frame, depth_img, f"D{SNAPSHOT_DURATION_SECONDS}_final", collision_id) # save final snapshot
+                exit(0)
                 is_logging = False
         
         elif mean > COLLISION_THRESHOLD_PERCENTAGE:
-            log_collision(mean, frame, depth_img, f"DURATION={SNAPSHOT_DURATION_SECONDS}s:initial", collision_id) # save initial snapshot
-            drone.tello.send_command_without_return("stop") # send drone stop command
+            print("Initial collision detected.")
+            collision_id += 1
+            log_collision(mean, frame, depth_img, f"D{SNAPSHOT_DURATION_SECONDS}_initial", collision_id) # save initial snapshot
+            
+            time_start = time.time()
+            seq_thread.stop()
+            drone_main.stop(drone)
             is_logging = True
         
         setattr(main, "is_logging", is_logging)
-        setattr(main, "logging_time_start", time.time())
-        setattr(main, "collision_id", 1 + collision_id)
+        setattr(main, "logging_time_start", time_start)
+        setattr(main, "collision_id", collision_id)
 
         # if mean > COLLISION_THRESHOLD_PERCENTAGE:
             
