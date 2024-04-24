@@ -1,0 +1,6 @@
+imgui
+PyOpenGL
+pygame
+numpy
+opencv-python
+djitellopy
